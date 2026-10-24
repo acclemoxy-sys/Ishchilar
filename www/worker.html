@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="uz"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Seh hisob — Ishchi</title>
+<link rel="stylesheet" href="common.css">
+</head><body>
+<div id="app"></div><div id="modal"></div>
+<script src="lib/jspdf.umd.min.js"></script>
+<script src="lib/jspdf.plugin.autotable.min.js"></script>
+<script src="lib/firebase-app-compat.js"></script>
+<script src="lib/firebase-auth-compat.js"></script>
+<script src="lib/firebase-firestore-compat.js"></script>
+<script src="firebase-config.js"></script>
+<script src="common.js"></script>
+<script src="fb.js"></script>
+<script>
+let S = { on: false, works: [], adv: [] }, unsubs = [], LOGGING = false, SHOP = null, timer = null;
+
+/* ---------- Kirish ---------- */
+function findScreen(msg = '') {
+  const sv = saved();
+  $('#app').innerHTML = `<div class="top"><b>Seh hisob — Ishchi</b><button class="ic" onclick="toLauncher()">🔁</button></div>
+  <div class="card"><h4>Kirish</h4>${msg ? `<div class="err">${esc(msg)}</div>` : ''}
+  <label>Seh nomi (admin aytgan nom)</label><input id="s_n" type="text" autocapitalize="none" value="${esc(sv && sv.role === 'worker' ? sv.shop : '')}">
+  <button id="s_go" style="width:100%;margin-top:12px">Davom etish</button></div>`;
+  $('#s_go').onclick = findShop;
+}
+async function findShop() {
+  const key = norm($('#s_n').value.trim());
+  if (key.length < 3) return findScreen('Seh nomini yozing');
+  $('#s_go').disabled = true;
+  try {
+    const d = await fs.doc('shops/' + key).get();
+    if (!d.exists) return findScreen('Bunday seh topilmadi. Nomini tekshiring');
+    SHOP = { key, ...d.data() }; pickScreen();
+  } catch (e) { findScreen(errTxt(e)); }
+}
+function pickScreen(msg = '') {
+  const sv = saved(), ws = Object.entries(SHOP.workers || {}).map(([id, w]) => ({ id, ...w })).sort((a, b) => a.n.localeCompare(b.n));
+  $('#app').innerHTML = `<div class="top"><div><b>${esc(SHOP.name)}</b><small>Ishchi kirishi</small></div><button class="ic" onclick="findScreen()">⬅️</button></div>
+  <div class="card">${msg ? `<div class="err">${esc(msg)}</div>` : ''}
+  ${ws.length ? `<label>Ismingizni tanlang</label><select id="s_w">${ws.map(w => `<option value="${w.id}" ${sv && sv.wid === w.id ? 'selected' : ''}>${esc(w.n)}</option>`).join('')}</select>
+  <label>PIN kod (4 ta raqam)</label><input id="s_p" type="password" inputmode="numeric" maxlength="4">
+  <label class="chk"><input id="s_r" type="checkbox" checked> Eslab qol (keyingi safar darrov kiradi)</label>
+  <button id="s_go" style="width:100%;margin-top:12px">Kirish</button>` : '<div class="mut">Bu sehda hali ishchi yo\'q. Admin sizni qo\'shishi kerak.</div>'}</div>`;
+  if (ws.length) $('#s_go').onclick = doLogin;
+}
+async function doLogin() {
+  const wid = $('#s_w').value, pin = $('#s_p').value, w = SHOP.workers[wid];
+  if (!/^\d{4}$/.test(pin)) return pickScreen('PIN 4 ta raqam bo\'lsin');
+  LOGGING = true; $('#s_go').disabled = true;
+  try {
+    await setPersist($('#s_r').checked);
+    await auth.signInWithEmailAndPassword(wEmail(SHOP.h, wid, w.v), wPass(pin));
+    setSaved({ role: 'worker', key: SHOP.key, wid, name: w.n, shop: SHOP.name }); LOGGING = false; start();
+  } catch (e) { LOGGING = false; pickScreen(errTxt(e).replace("Email, parol yoki PIN", 'PIN')); }
+}
+auth.onAuthStateChanged(u => {
+  if (LOGGING) return;
+  const sv = saved();
+  if (u && sv && sv.role === 'worker') start();
+  else { if (u) auth.signOut(); findScreen(); }
+});
+async function logout(msg = '') {
+  unsubs.forEach(f => f()); unsubs = []; clearInterval(timer); S = { on: false, works: [], adv: [] };
+  await auth.signOut(); findScreen(msg);
+}
+
+/* ---------- Ma'lumot ---------- */
+function start() {
+  if (S.on) return; S.on = true;
+  const sv = saved(), base = fs.doc('shops/' + sv.key);
+  const denied = e => e.code === 'permission-denied' ? logout("Kirish eskirgan yoki PIN o'zgargan. Qayta kiring") : ($('#app').innerHTML = `<div class="card"><div class="err">${esc(errTxt(e))}</div><button onclick="logout()">Chiqish</button></div>`);
+  unsubs = [
+    base.collection('works').where('wid', '==', sv.wid).onSnapshot(q => { S.works = q.docs.map(d => ({ id: d.id, ...d.data() })); render(); }, denied),
+    base.collection('advances').where('wid', '==', sv.wid).onSnapshot(q => { S.adv = q.docs.map(d => ({ id: d.id, ...d.data() })); render(); }, denied)
+  ];
+  timer = setInterval(render, 30000);
+  render();
+}
+
+/* ---------- Ekran ---------- */
+function render() {
+  if (!S.on) return;
+  const sv = saved(), c = calc(S.works, S.adv);
+  const hand = S.works.filter(x => !x.done && !x.canceled).sort((a, b) => (a.dueAt || 9e15) - (b.dueAt || 9e15) || b.at - a.at);
+  const hist = [...S.works.filter(x => x.done || x.canceled).map(x => ({ k: 'w', x })), ...S.adv.map(x => ({ k: 'a', x }))].sort((p, q) => q.x.at - p.x.at);
+  const wItem = x => { const L = x.dueAt && !x.done && !x.canceled ? left(x.dueAt) : null;
+    return `<div class="item"><div class="h"><div class="${x.canceled ? 'strike' : ''}"><b>${esc(x.model)}</b><br>${x.qty} dona × ${money(x.price)}</div>
+      <div class="amt dn ${x.canceled ? 'strike' : ''}">+ ${money(x.qty * x.price)}</div></div>
+    <div class="mut">${fmt(x.at)}${x.quality ? ' · Sifat: ' + esc(x.quality) : ''}${x.canceled ? ' · admin bekor qilgan (xato)' : ''}</div>
+    ${L ? `<div class="${L.late ? 'late' : 'left'}">${L.t}<span class="mut"> (muddat: ${fmt(x.dueAt)})</span></div>` : ''}
+    ${x.complaint ? `<div class="cmp">Sizning e'tirozingiz: ${esc(x.complaint.text)}${x.complaint.seen ? ' ✓ admin ko\'rdi' : ''}</div>` : ''}
+    ${x.canceled ? '' : `<div class="acts"><button class="sm b2" onclick="complain('${x.id}')">⚠️ ${x.complaint ? "E'tirozni o'zgartirish" : "E'tiroz bildirish"}</button></div>`}</div>`; };
+  const aItem = x => `<div class="item"><div class="h"><div class="${x.canceled ? 'strike' : ''}"><b>Avans</b>${x.note ? '<br>' + esc(x.note) : ''}</div>
+    <div class="amt up ${x.canceled ? 'strike' : ''}">− ${money(x.amount)}</div></div><div class="mut">${fmt(x.at)}${x.canceled ? ' · bekor qilingan (xato)' : ''}</div></div>`;
+  $('#app').innerHTML = `<div class="top"><div><b>${esc(sv.name)}</b><small>${esc(sv.shop)}</small></div><button class="ic" onclick="settings()">⚙️</button></div>
+  <div class="card"><div>Berilgan ish: <b class="dn">+ ${money(c.w)}</b> so'm <span class="mut">(${c.cnt} dona)</span></div>
+  <div>Olingan avans: <b class="up">− ${money(c.a)}</b> so'm</div><hr>
+  <div class="big ${balCls(c.bal)}">${c.bal > 0 ? `Sizga berilishi kerak: ${money(c.bal)} so'm` : c.bal < 0 ? `Avans ortiqcha olingan: ${money(-c.bal)} so'm` : "Hisob teng: 0 so'm"}</div>
+  <div class="mut">Qo'lingizdagi ish: ${c.hand} dona</div>
+  <button class="sm b2" style="margin-top:8px" onclick="myPdf()">📄 PDF hisobot</button></div>
+  <div class="sec">Qo'limdagi ishlar (${hand.length})</div>${hand.map(wItem).join('') || '<div class="item mut">Hozir qo\'lingizda ish yo\'q</div>'}
+  <div class="sec">Hisob tarixi</div>${hist.slice(0, 80).map(e => e.k === 'w' ? wItem(e.x) : aItem(e.x)).join('') || '<div class="item mut">Yo\'q</div>'}`;
+}
+function myPdf() { const sv = saved(); savePdf(pdfWorker(sv.name, sv.shop, S.works, S.adv), 'mening_hisobotim.pdf'); }
+function complain(id) {
+  const x = S.works.find(w => w.id === id), sv = saved();
+  form("E'tiroz bildirish", [{ k: 't', label: "Nima kamchilik bor? (masalan: xom ashyoda nuqson)", type: 'area', value: x.complaint ? x.complaint.text : '' }], async v => {
+    if (!v.t) return 'Matn yozing';
+    await fs.doc(`shops/${sv.key}/works/${id}`).update({ complaint: { text: v.t, at: Date.now(), seen: false } });
+  });
+}
+function settings() {
+  $('#modal').innerHTML = `<div class="ov"><div class="sheet stack"><h3>Sozlamalar</h3>
+  <button class="b2" onclick="close();toLauncher()">🔁 Rejimni almashtirish</button>
+  <button class="b2" onclick="close();logout()">🚪 Chiqish</button>
+  <button class="b2" onclick="close()">Yopish</button></div></div>`;
+}
+</script>
+</body></html>

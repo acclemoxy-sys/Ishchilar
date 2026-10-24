@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Seh hisob (bitta telefon)</title>
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{margin:0;font-family:system-ui,Roboto,Arial,sans-serif;background:#f3f4f6;color:#111;font-size:16px;padding-bottom:40px}
+.top{display:flex;justify-content:space-between;align-items:center;padding:12px 14px;background:#1e40af;color:#fff;position:sticky;top:0;z-index:5}
+.top small{display:block;opacity:.8;font-size:12px}
+.top b{font-size:18px}
+.ic{background:transparent;border:0;color:#fff;font-size:22px;padding:4px 8px}
+button{background:#2563eb;color:#fff;border:0;border-radius:10px;padding:10px 14px;font-size:15px}
+button.b2{background:#e5e7eb;color:#111}
+button.red{background:#dc2626}
+button.sm{padding:4px 8px;font-size:14px;background:#eef2ff;margin-left:4px}
+.card{background:#fff;margin:10px;padding:12px;border-radius:14px;box-shadow:0 1px 3px #0002;line-height:1.6}
+.card h4{margin:0 0 6px}
+.card hr{border:0;border-top:1px solid #e5e7eb;margin:8px 0}
+.card button{margin-top:8px;margin-right:6px}
+.sec{display:flex;justify-content:space-between;align-items:center;padding:6px 14px}
+.sec h4{margin:0}
+.row{display:flex;justify-content:space-between;align-items:center;background:#fff;margin:6px 10px;padding:14px;border-radius:12px;box-shadow:0 1px 2px #0002}
+.item{display:flex;justify-content:space-between;align-items:center;background:#fff;margin:6px 10px;padding:10px 12px;border-radius:12px}
+.item small,.mut{color:#6b7280}
+.amt{text-align:right;font-weight:600}
+.amt.neg{color:#b91c1c}
+.bal{font-weight:700}
+.debt{color:#c2410c}
+.pre{color:#15803d}
+.ov{position:fixed;inset:0;background:#0007;display:flex;align-items:flex-end;z-index:10}
+.sheet{background:#fff;width:100%;max-height:92vh;overflow:auto;border-radius:18px 18px 0 0;padding:16px}
+.sheet h3{margin:0 0 8px}
+.sheet label{display:block;margin:10px 0 3px;color:#374151;font-size:14px}
+.sheet input{width:100%;padding:11px;font-size:16px;border:1px solid #d1d5db;border-radius:10px}
+.btns{display:flex;gap:10px;margin-top:16px}
+.btns button{flex:1}
+.stack button{display:block;width:100%;margin:8px 0}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="modal"></div>
+<input type="file" id="rf" accept=".json,application/json" style="display:none">
+
+<script src="lib/jspdf.umd.min.js"></script>
+<script src="lib/jspdf.plugin.autotable.min.js"></script>
+<script>
+/* ================= MA'LUMOTLAR (telefon xotirasida) ================= */
+localStorage.setItem('seh_mode', 'local');
+const KEY = 'seh_db';
+let db = load();
+function load() {
+  try {
+    const d = JSON.parse(localStorage.getItem(KEY));
+    if (d && d.workers) { d.set = d.set || {}; d.seq = d.seq || 1; return d; }
+  } catch (e) {}
+  return { workers: [], works: [], adv: [], set: {}, seq: 1 };
+}
+function save() { localStorage.setItem(KEY, JSON.stringify(db)); }
+function nid() { return db.seq++; }
+
+/* ================= YORDAMCHI ================= */
+const $ = s => document.querySelector(s);
+const money = n => Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+const pn = s => parseFloat(String(s).replace(/\s/g, '').replace(',', '.'));
+const nowStr = () => { const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 16); };
+const showDt = s => { const [d, t] = s.split('T'); const [y, m, dd] = d.split('-'); return `${dd}.${m}.${y} ${t}`; };
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+function tot(wid) {
+  const e = db.works.filter(x => x.wid === wid).reduce((a, x) => a + x.qty * x.price, 0);
+  const a = db.adv.filter(x => x.wid === wid).reduce((s, x) => s + x.amount, 0);
+  return { e, a, b: e - a };
+}
+const balTxt = b => b > 0 ? `Berilishi kerak (qarzmiz): ${money(b)} so'm`
+  : b < 0 ? `Oldindan to'langan: ${money(-b)} so'm` : "Hisob teng: 0 so'm";
+const balCls = b => b > 0 ? 'debt' : b < 0 ? 'pre' : '';
+function close() { $('#modal').innerHTML = ''; }
+function back() { if (history.length > 1) history.back(); else location.hash = ''; }
+
+/* ================= FORMA ================= */
+function form(title, fields, onSave) {
+  $('#modal').innerHTML = `<div class="ov"><div class="sheet"><h3>${title}</h3>` +
+    fields.map(f => `<label>${f.label}</label><input id="f_${f.k}" type="${f.type === 'num' ? 'text' : (f.type || 'text')}" ${f.type === 'num' ? 'inputmode="decimal"' : ''} value="${esc(f.value ?? '')}" ${f.list ? `list="dl_${f.k}"` : ''}>` +
+      (f.list ? `<datalist id="dl_${f.k}">${f.list.map(x => `<option value="${esc(x)}">`).join('')}</datalist>` : '')).join('') +
+    `<div class="btns"><button class="b2" id="fc">Bekor</button><button id="fs">Saqlash</button></div></div></div>`;
+  $('#fc').onclick = close;
+  $('#fs').onclick = () => {
+    const v = {}; fields.forEach(f => v[f.k] = $('#f_' + f.k).value.trim());
+    if (onSave(v) !== false) close();
+  };
+}
+
+/* ================= EKRANLAR ================= */
+function route() {
+  const h = location.hash;
+  if (h.startsWith('#w')) {
+    const id = +h.slice(2);
+    if (db.workers.find(w => w.id === id)) return renderWorker(id);
+  }
+  renderHome();
+}
+window.addEventListener('hashchange', route);
+
+function renderHome() {
+  const today = nowStr().slice(0, 10);
+  const g = {};
+  db.works.filter(x => x.dt.startsWith(today)).forEach(x => {
+    const o = g[x.model] || (g[x.model] = { w: new Set(), q: 0, s: 0 });
+    o.w.add(x.wid); o.q += x.qty; o.s += x.qty * x.price;
+  });
+  const te = db.works.reduce((a, x) => a + x.qty * x.price, 0);
+  const ta = db.adv.reduce((a, x) => a + x.amount, 0);
+  const b = te - ta;
+  const ws = [...db.workers].sort((a, c) => a.name.localeCompare(c.name));
+  $('#app').innerHTML = `
+  <div class="top"><div><b>Seh hisob</b><small>${showDt(nowStr())}</small></div><button class="ic" onclick="settings()">⚙️</button></div>
+  <div class="card"><h4>Bugungi ish</h4>
+    ${Object.keys(g).length ? Object.entries(g).map(([m, o]) => `<div>${esc(m)}dan <b>${o.w.size}</b> kishiga berildi, jami <b>${o.q}</b> ta (${money(o.s)} so'm)</div>`).join('') : '<div class="mut">Bugun ish berilmagan</div>'}
+    <hr>
+    <div>Seh bo'yicha jami ishlangan: <b>${money(te)}</b></div>
+    <div>Jami avans berilgan: <b>${money(ta)}</b></div>
+    <div class="bal ${balCls(b)}">${balTxt(b)}</div>
+    <button class="b2" onclick="shopPdf()">📄 Umumiy hisobot (PDF)</button>
+  </div>
+  <div class="sec"><h4>Ishchilar (${ws.length})</h4><button onclick="addWorker()">+ Ishchi</button></div>
+  ${ws.map(w => { const t = tot(w.id); return `<div class="row" onclick="location.hash='w${w.id}'"><b>${esc(w.name)}</b><span class="${balCls(t.b)}">${t.b > 0 ? 'Qarz: ' : t.b < 0 ? 'Oldindan: ' : ''}${money(Math.abs(t.b))}</span></div>`; }).join('')}
+  ${ws.length ? '' : '<div class="card mut">Hali ishchi yo\'q. "+ Ishchi" tugmasini bosing.</div>'}`;
+}
+
+function renderWorker(id) {
+  const w = db.workers.find(x => x.id === id), t = tot(id);
+  const items = [
+    ...db.works.filter(x => x.wid === id).map(x => ({ k: 'w', x })),
+    ...db.adv.filter(x => x.wid === id).map(x => ({ k: 'a', x }))
+  ].sort((a, c) => c.x.dt.localeCompare(a.x.dt));
+  $('#app').innerHTML = `
+  <div class="top"><button class="ic" onclick="back()">←</button><b>${esc(w.name)}</b><span></span></div>
+  <div class="card">
+    <div>Jami ishlagan: <b>${money(t.e)}</b></div>
+    <div>Jami avans olgan: <b>${money(t.a)}</b></div>
+    <div class="bal ${balCls(t.b)}">${balTxt(t.b)}</div>
+    <button onclick="workForm(${id})">+ Ish berish</button><button onclick="advForm(${id})">+ Avans</button>
+    <button class="b2" onclick="workerPdf(${id})">📄 PDF</button>
+    <button class="b2" onclick="renameWorker(${id})">Ismni o'zgartirish</button>
+    <button class="red" onclick="delWorker(${id})">Ishchini o'chirish</button>
+  </div>
+  <div class="sec"><h4>Tarix (${items.length})</h4></div>
+  ${items.map(i => { const x = i.x; return `<div class="item"><div><small>${showDt(x.dt)}</small><div>${i.k === 'w' ? `${esc(x.model)}: ${x.qty} ta x ${money(x.price)}` : `Avans${x.note ? ': ' + esc(x.note) : ''}`}</div></div>
+    <div class="amt ${i.k === 'a' ? 'neg' : ''}">${i.k === 'a' ? '-' : ''}${money(i.k === 'w' ? x.qty * x.price : x.amount)}
+    <div><button class="sm" onclick="editItem('${i.k}',${x.id})">✏️</button><button class="sm" onclick="delItem('${i.k}',${x.id})">🗑️</button></div></div></div>`; }).join('')}
+  ${items.length ? '' : '<div class="card mut">Hali yozuv yo\'q.</div>'}`;
+}
+
+/* ================= ISHCHI ================= */
+function addWorker() {
+  form('Yangi ishchi', [{ k: 'name', label: 'Ism' }], v => {
+    if (!v.name) return false;
+    db.workers.push({ id: nid(), name: v.name }); save(); route();
+  });
+}
+function renameWorker(id) {
+  const w = db.workers.find(x => x.id === id);
+  form('Ismni o\'zgartirish', [{ k: 'name', label: 'Ism', value: w.name }], v => {
+    if (!v.name) return false; w.name = v.name; save(); route();
+  });
+}
+function delWorker(id) {
+  if (!confirm('Ishchi va uning BARCHA yozuvlari o\'chadi. Davom etamizmi?')) return;
+  db.workers = db.workers.filter(x => x.id !== id);
+  db.works = db.works.filter(x => x.wid !== id);
+  db.adv = db.adv.filter(x => x.wid !== id);
+  save(); history.back();
+}
+
+/* ================= ISH / AVANS ================= */
+function workForm(wid, item) {
+  const models = [...new Set(db.works.map(x => x.model))];
+  form(item ? 'Ishni tahrirlash' : 'Ish berish', [
+    { k: 'model', label: 'Model (masalan: 1-model)', value: item?.model, list: models },
+    { k: 'qty', label: 'Soni (dona)', type: 'num', value: item?.qty },
+    { k: 'price', label: "Narxi (1 dona, so'm)", type: 'num', value: item?.price },
+    { k: 'dt', label: 'Sana va vaqt', type: 'datetime-local', value: item?.dt || nowStr() }
+  ], v => {
+    const qty = pn(v.qty), price = pn(v.price);
+    if (!v.model || !(qty > 0) || !(price >= 0) || !v.dt) { alert("Ma'lumotlar to'liq emas"); return false; }
+    if (item) Object.assign(item, { model: v.model, qty, price, dt: v.dt });
+    else db.works.push({ id: nid(), wid, model: v.model, qty, price, dt: v.dt });
+    save(); route();
+  });
+  if (!item) $('#f_model').addEventListener('change', e => {
+    const l = [...db.works].reverse().find(x => x.model === e.target.value);
+    if (l && !$('#f_price').value) $('#f_price').value = l.price;
+  });
+}
+function advForm(wid, item) {
+  form(item ? 'Avansni tahrirlash' : 'Avans berish', [
+    { k: 'amount', label: "Summa (so'm)", type: 'num', value: item?.amount },
+    { k: 'note', label: 'Izoh (ixtiyoriy)', value: item?.note },
+    { k: 'dt', label: 'Sana va vaqt', type: 'datetime-local', value: item?.dt || nowStr() }
+  ], v => {
+    const amount = pn(v.amount);
+    if (!(amount > 0) || !v.dt) { alert("Summa noto'g'ri"); return false; }
+    if (item) Object.assign(item, { amount, note: v.note, dt: v.dt });
+    else db.adv.push({ id: nid(), wid, amount, note: v.note, dt: v.dt });
+    save(); route();
+  });
+}
+function editItem(k, id) {
+  if (k === 'w') { const x = db.works.find(i => i.id === id); workForm(x.wid, x); }
+  else { const x = db.adv.find(i => i.id === id); advForm(x.wid, x); }
+}
+function delItem(k, id) {
+  if (!confirm("Bu yozuv o'chirilsinmi?")) return;
+  if (k === 'w') db.works = db.works.filter(i => i.id !== id);
+  else db.adv = db.adv.filter(i => i.id !== id);
+  save(); route();
+}
+
+/* ================= PDF ================= */
+async function shareFile(name, dataB64OrText, isText) {
+  try {
+    const cap = window.Capacitor;
+    if (cap && cap.isNativePlatform && cap.isNativePlatform()) {
+      const { Filesystem, Share } = cap.Plugins;
+      const opt = { path: name, data: dataB64OrText, directory: 'CACHE' };
+      if (isText) opt.encoding = 'utf8';
+      const r = await Filesystem.writeFile(opt);
+      await Share.share({ title: name, url: r.uri, dialogTitle: 'Saqlash / yuborish' });
+    } else {
+      const a = document.createElement('a');
+      a.href = isText ? 'data:application/json;charset=utf-8,' + encodeURIComponent(dataB64OrText)
+        : 'data:application/pdf;base64,' + dataB64OrText;
+      a.download = name; a.click();
+    }
+  } catch (e) { alert('Xato: ' + (e.message || e)); }
+}
+function pdfBase(title) {
+  const d = new window.jspdf.jsPDF();
+  d.setFontSize(16); d.text(title, 14, 18);
+  d.setFontSize(10); d.text('Sana: ' + showDt(nowStr()), 14, 25);
+  return d;
+}
+function sign(d, y, two) {
+  if (y > 245) { d.addPage(); y = 20; }
+  d.setFontSize(11);
+  d.text("Seh boshlig'i imzosi: ______________", 14, y + 22);
+  if (two) d.text('Ishchi imzosi: ______________', 120, y + 22);
+}
+function finishPdf(d, name) {
+  shareFile(name, d.output('datauristring').split(',')[1], false);
+}
+function workerPdf(id) {
+  const w = db.workers.find(x => x.id === id), t = tot(id);
+  const d = pdfBase('Ishchi hisoboti: ' + w.name);
+  const items = [
+    ...db.works.filter(x => x.wid === id).map(x => [x.dt, 'Ish', `${x.model}: ${x.qty} ta x ${money(x.price)}`, money(x.qty * x.price)]),
+    ...db.adv.filter(x => x.wid === id).map(x => [x.dt, 'Avans', x.note || '', '-' + money(x.amount)])
+  ].sort((a, c) => a[0].localeCompare(c[0])).map(r => [showDt(r[0]), r[1], r[2], r[3]]);
+  d.autoTable({ startY: 31, head: [['Sana', 'Tur', 'Tafsilot', 'Summa']], body: items,
+    styles: { fontSize: 9 }, columnStyles: { 3: { halign: 'right' } } });
+  let y = d.lastAutoTable.finalY + 8;
+  if (y > 250) { d.addPage(); y = 20; }
+  d.setFontSize(11);
+  d.text(`Jami ishlagan: ${money(t.e)} so'm`, 14, y);
+  d.text(`Jami avans olgan: ${money(t.a)} so'm`, 14, y + 6);
+  d.setFont(undefined, 'bold'); d.text(balTxt(t.b), 14, y + 12); d.setFont(undefined, 'normal');
+  sign(d, y + 12, true);
+  finishPdf(d, 'hisobot_' + w.name.replace(/[^\w-]+/g, '_') + '.pdf');
+}
+function shopPdf() {
+  const d = pdfBase('Umumiy seh hisoboti');
+  let te = 0, ta = 0;
+  const rows = db.workers.map(w => { const t = tot(w.id); te += t.e; ta += t.a; return [w.name, money(t.e), money(t.a), money(t.b)]; });
+  rows.push(['JAMI', money(te), money(ta), money(te - ta)]);
+  d.autoTable({ startY: 31, head: [['Ishchi', 'Ishlagan', 'Avans', 'Qoldiq']], body: rows,
+    styles: { fontSize: 9 }, columnStyles: { 1: { halign: 'right' }, 2: { halign: 'right' }, 3: { halign: 'right' } } });
+  const g = {};
+  db.works.forEach(x => { const o = g[x.model] || (g[x.model] = { w: new Set(), q: 0, s: 0 }); o.w.add(x.wid); o.q += x.qty; o.s += x.qty * x.price; });
+  d.autoTable({ startY: d.lastAutoTable.finalY + 8, head: [['Model', 'Ishchi soni', 'Jami dona', 'Summa']],
+    body: Object.entries(g).map(([m, o]) => [m, o.w.size, o.q, money(o.s)]), styles: { fontSize: 9 } });
+  let y = d.lastAutoTable.finalY + 8;
+  if (y > 250) { d.addPage(); y = 20; }
+  d.setFontSize(11); d.setFont(undefined, 'bold'); d.text(balTxt(te - ta), 14, y); d.setFont(undefined, 'normal');
+  d.setFontSize(9); d.text("Qoldiq (+) = berilishi kerak, (-) = oldindan to'langan.", 14, y + 6);
+  sign(d, y + 6, false);
+  finishPdf(d, 'umumiy_hisobot.pdf');
+}
+
+/* ================= ZAXIRA ================= */
+function settings() {
+  $('#modal').innerHTML = `<div class="ov"><div class="sheet stack"><h3>Zaxira va sozlamalar</h3>
+    <button onclick="close();shareFile('seh_zaxira.json',JSON.stringify(db),true)">💾 Zaxirani faylga saqlash</button>
+    <button class="b2" onclick="close();$('#rf').click()">♻️ Zaxiradan tiklash (fayl)</button>
+    <button class="b2" onclick="localStorage.removeItem('seh_mode');location.href='index.html'">🔁 Rejimni almashtirish</button>
+    <button class="b2" onclick="close()">Yopish</button></div></div>`;
+}
+$('#rf').addEventListener('change', e => {
+  const f = e.target.files[0]; if (!f) return;
+  const r = new FileReader();
+  r.onload = () => {
+    try {
+      const d = JSON.parse(r.result);
+      if (!d.workers || !d.works || !d.adv) throw new Error("Bu zaxira fayli emas");
+      if (!confirm('Hozirgi ma\'lumotlar zaxira bilan almashtiriladi. Davom etamizmi?')) return;
+      localStorage.setItem('seh_db_prev', localStorage.getItem(KEY) || '');
+      db = d; db.set = db.set || {}; db.seq = db.seq || 1; save(); location.hash = ''; route();
+      alert('Tiklandi');
+    } catch (err) { alert('Xato: ' + err.message); }
+  };
+  r.readAsText(f); e.target.value = '';
+});
+
+/* ================= BOSHLASH ================= */
+route();
+// eski Telegram sozlamalari bo'lsa, o'chirib tashlaymiz
+if (db.set && (db.set.token || db.set.chat)) { delete db.set.token; delete db.set.chat; delete db.set.last; save(); }
+</script>
+</body>
+</html>
