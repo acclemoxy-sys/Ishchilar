@@ -1,4 +1,4 @@
-name: APK yig'ish
+name: APK va AAB yig'ish
 on:
   push:
   workflow_dispatch:
@@ -9,26 +9,63 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 17
+          java-version: 21
       - run: npm install
       - name: Kutubxonalarni nusxalash
         run: |
           mkdir -p www/lib
           cp node_modules/jspdf/dist/jspdf.umd.min.js www/lib/
           cp node_modules/jspdf-autotable/dist/jspdf.plugin.autotable.min.js www/lib/
+          cp node_modules/firebase/firebase-app-compat.js node_modules/firebase/firebase-auth-compat.js node_modules/firebase/firebase-firestore-compat.js www/lib/
       - run: npx cap add android
       - run: npx cap sync android
-      - name: Doimiy imzo kaliti (yangilanganda ma'lumot o'chmasligi uchun)
+      - name: Imzo va versiya sozlash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          VERSION_CODE: ${{ github.run_number }}
         run: |
-          mkdir -p ~/.android
-          cp debug.keystore ~/.android/debug.keystore
-      - name: APK yig'ish
-        run: cd android && ./gradlew assembleDebug
+          python3 - <<'PY'
+          import re, os
+          p = 'android/app/build.gradle'
+          s = open(p).read()
+          s = re.sub(r'versionCode\s+\d+', 'versionCode ' + os.environ['VERSION_CODE'], s)
+          s = re.sub(r'versionName\s+"[^"]*"', 'versionName "1.0"', s)
+          signing = '''signingConfigs {
+                  release {
+                      storeFile file("upload.jks")
+                      storePassword System.getenv("KEYSTORE_PASSWORD")
+                      keyAlias System.getenv("KEY_ALIAS")
+                      keyPassword System.getenv("KEY_PASSWORD")
+                  }
+              }
+              buildTypes {'''
+          s = re.sub(r'(release\s*\{)', r'\1\n            signingConfig signingConfigs.release', s, count=1)
+          s = s.replace('buildTypes {', signing, 1)
+          open(p, 'w').write(s)
+          PY
+          echo "$KEYSTORE_BASE64" | base64 -d > android/app/upload.jks
+          grep -n -E "versionCode|signingConfig|targetSdk" android/app/build.gradle android/variables.gradle || true
+      - name: AAB yig'ish (Play Market uchun)
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: cd android && ./gradlew bundleRelease
+      - name: APK yig'ish (telefonda tekshirish uchun)
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: cd android && ./gradlew assembleRelease
+      - uses: actions/upload-artifact@v4
+        with:
+          name: seh-hisob-aab
+          path: android/app/build/outputs/bundle/release/app-release.aab
       - uses: actions/upload-artifact@v4
         with:
           name: seh-hisob-apk
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          path: android/app/build/outputs/apk/release/app-release.apk
