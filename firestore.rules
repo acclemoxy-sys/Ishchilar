@@ -1,0 +1,52 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function shopData(key) {
+      return get(/databases/$(database)/documents/shops/$(key)).data;
+    }
+    function isAdmin(key) {
+      return request.auth != null && shopData(key).owner == request.auth.uid;
+    }
+    // ishchi emaili: w.<seh-hash>.<ishchi-id>.<versiya>@sehhisob.app
+    function isWorker(key, wid) {
+      let p = request.auth.token.email.split('[.]');
+      return request.auth != null
+        && p[0] == 'w'
+        && p[1] == shopData(key).h
+        && p[2] == wid
+        && p[3].split('@')[0] == string(shopData(key).workers[wid].v);
+    }
+
+    // admin akkaunti -> uning seh kaliti
+    match /users/{uid} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+    }
+
+    match /shops/{key} {
+      // ishchi kirishdan oldin seh nomi va ishchilar ro'yxatini ko'ra olishi uchun
+      allow get: if true;
+      allow list: if false;
+      // seh ochishni faqat haqiqiy email bilan kirgan admin qila oladi (ishchi akkauntlari emas)
+      allow create: if request.auth != null
+        && !request.auth.token.email.matches('.*@sehhisob[.]app')
+        && key.size() >= 3 && key.size() <= 40
+        && request.resource.data.owner == request.auth.uid;
+      allow update, delete: if isAdmin(key);
+
+      match /workers/{wid} {
+        allow read, write: if isAdmin(key);
+      }
+      match /works/{id} {
+        allow read: if isAdmin(key) || (request.auth != null && isWorker(key, resource.data.wid));
+        allow create, delete: if isAdmin(key);
+        allow update: if isAdmin(key) || (request.auth != null && isWorker(key, resource.data.wid)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['complaint']));
+      }
+      match /advances/{id} {
+        allow read: if isAdmin(key) || (request.auth != null && isWorker(key, resource.data.wid));
+        allow create, update, delete: if isAdmin(key);
+      }
+    }
+  }
+}
