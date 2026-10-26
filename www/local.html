@@ -76,7 +76,7 @@ function tot(wid) {
 const balTxt = b => b > 0 ? `Berilishi kerak (qarzmiz): ${money(b)} so'm`
   : b < 0 ? `Oldindan to'langan: ${money(-b)} so'm` : "Hisob teng: 0 so'm";
 const balCls = b => b > 0 ? 'debt' : b < 0 ? 'pre' : '';
-function close() { $('#modal').innerHTML = ''; }
+function closeModal() { $('#modal').innerHTML = ''; }
 function back() { if (history.length > 1) history.back(); else location.hash = ''; }
 
 /* ================= FORMA ================= */
@@ -85,10 +85,10 @@ function form(title, fields, onSave) {
     fields.map(f => `<label>${f.label}</label><input id="f_${f.k}" type="${f.type === 'num' ? 'text' : (f.type || 'text')}" ${f.type === 'num' ? 'inputmode="decimal"' : ''} value="${esc(f.value ?? '')}" ${f.list ? `list="dl_${f.k}"` : ''}>` +
       (f.list ? `<datalist id="dl_${f.k}">${f.list.map(x => `<option value="${esc(x)}">`).join('')}</datalist>` : '')).join('') +
     `<div class="btns"><button class="b2" id="fc">Bekor</button><button id="fs">Saqlash</button></div></div></div>`;
-  $('#fc').onclick = close;
+  $('#fc').onclick = closeModal;
   $('#fs').onclick = () => {
     const v = {}; fields.forEach(f => v[f.k] = $('#f_' + f.k).value.trim());
-    if (onSave(v) !== false) close();
+    if (onSave(v) !== false) closeModal();
   };
 }
 
@@ -291,10 +291,10 @@ function shopPdf() {
 /* ================= ZAXIRA ================= */
 function settings() {
   $('#modal').innerHTML = `<div class="ov"><div class="sheet stack"><h3>Zaxira va sozlamalar</h3>
-    <button onclick="close();shareFile('seh_zaxira.json',JSON.stringify(db),true)">💾 Zaxirani faylga saqlash</button>
-    <button class="b2" onclick="close();$('#rf').click()">♻️ Zaxiradan tiklash (fayl)</button>
+    <button onclick="closeModal();shareFile('seh_zaxira.json',JSON.stringify(db),true)">💾 Zaxirani faylga saqlash</button>
+    <button class="b2" onclick="closeModal();$('#rf').click()">♻️ Zaxiradan tiklash (fayl)</button>
     <button class="b2" onclick="localStorage.removeItem('seh_mode');location.href='index.html'">🔁 Rejimni almashtirish</button>
-    <button class="b2" onclick="close()">Yopish</button></div></div>`;
+    <button class="b2" onclick="closeModal()">Yopish</button></div></div>`;
 }
 $('#rf').addEventListener('change', e => {
   const f = e.target.files[0]; if (!f) return;

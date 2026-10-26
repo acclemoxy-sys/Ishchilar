@@ -6,7 +6,7 @@ const p2 = n => String(n).padStart(2, '0');
 const fmt = ms => { const d = new Date(ms); return `${p2(d.getDate())}.${p2(d.getMonth() + 1)}.${d.getFullYear()} ${p2(d.getHours())}:${p2(d.getMinutes())}`; };
 const toLocalInput = ms => { const d = new Date(ms); return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}T${p2(d.getHours())}:${p2(d.getMinutes())}`; };
 const nid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
-function close() { $('#modal').innerHTML = ''; }
+function closeModal() { $('#modal').innerHTML = ''; }
 function left(ms) {
   const d = ms - Date.now(), a = Math.abs(d);
   const days = Math.floor(a / 864e5), h = Math.floor(a % 864e5 / 36e5), m = Math.floor(a % 36e5 / 6e4);
@@ -27,13 +27,13 @@ function form(title, fields, onSave) {
     return `<label>${f.label}</label><input id="${id}" type="${t}" ${ex} value="${esc(f.value)}" ${f.list ? `list="dl_${f.k}"` : ''}>` +
       (f.list ? `<datalist id="dl_${f.k}">${f.list.map(x => `<option value="${esc(x)}">`).join('')}</datalist>` : '');
   }).join('') + `<div class="btns"><button class="b2" id="fc">Bekor</button><button id="fs">Saqlash</button></div></div></div>`;
-  $('#fc').onclick = close;
+  $('#fc').onclick = closeModal;
   $('#fs').onclick = async () => {
     const v = {}; fields.forEach(f => { const e = $('#f_' + f.k); v[f.k] = f.type === 'check' ? e.checked : e.value.trim(); });
     $('#fs').disabled = true;
     try {
       const r = await onSave(v);
-      if (r === false || typeof r === 'string') { if (r) alert(r); $('#fs').disabled = false; } else close();
+      if (r === false || typeof r === 'string') { if (r) alert(r); $('#fs').disabled = false; } else closeModal();
     } catch (e) { alert('Xato: ' + (e.message || e)); $('#fs').disabled = false; }
   };
 }
