@@ -39,10 +39,16 @@ function form(title, fields, onSave) {
 }
 
 /* ---------- Hisob-kitob: ish = qarz (+, qizil), avans = (-, yashil) ---------- */
+function withOk(ws, subs) {
+  const ok = {}, pe = {};
+  subs.forEach(s => { if (s.status === 'ok') ok[s.workId] = (ok[s.workId] || 0) + s.q; else if (s.status === 'pending') pe[s.workId] = (pe[s.workId] || 0) + s.q; });
+  return ws.map(x => ({ ...x, ok: ok[x.id] || 0, pend: pe[x.id] || 0 }));
+}
+// pul: ish berilgan zahoti hisoblanadi. hand = hali topshirilmagan (tasdiqlanmagan) dona
 function calc(ws, as) {
   ws = ws.filter(x => !x.canceled); as = as.filter(x => !x.canceled);
   const w = ws.reduce((a, x) => a + x.qty * x.price, 0), a = as.reduce((s, x) => s + x.amount, 0);
-  return { w, a, bal: w - a, hand: ws.filter(x => !x.done).reduce((s, x) => s + x.qty, 0), cnt: ws.reduce((s, x) => s + x.qty, 0) };
+  return { w, a, bal: w - a, hand: ws.reduce((s, x) => s + Math.max(0, x.qty - (x.ok || 0)), 0), pend: ws.reduce((s, x) => s + (x.pend || 0), 0), cnt: ws.reduce((s, x) => s + x.qty, 0) };
 }
 const balCls = b => b > 0 ? 'dn' : b < 0 ? 'up' : '';
 const balLine = b => b > 0 ? `Qoldiq qarz: ${money(b)} so'm` : b < 0 ? `Avans ortiqcha: ${money(-b)} so'm` : "Hisob teng: 0 so'm";
@@ -73,7 +79,7 @@ function pdfWorker(name, shop, works, advs) {
   const c = calc(works, advs);
   const d = pdfStart(`Hisobot: ${name}`, `${shop}  |  ${fmt(Date.now())}`);
   const ev = [
-    ...works.filter(x => !x.canceled).map(x => ({ at: x.at, t: `${x.model}: ${x.qty} dona x ${money(x.price)}` + (x.quality ? ` (${x.quality})` : '') + (x.done ? '' : ' [qo\'lida]'), w: x.qty * x.price, a: 0 })),
+    ...works.filter(x => !x.canceled).map(x => ({ at: x.at, t: `${x.model}: ${x.qty} dona x ${money(x.price)}` + (x.quality ? ` (${x.quality})` : '') + ((x.ok || 0) < x.qty ? ` [topshirildi ${x.ok || 0}/${x.qty}]` : ''), w: x.qty * x.price, a: 0 })),
     ...advs.filter(x => !x.canceled).map(x => ({ at: x.at, t: 'Avans' + (x.note ? ': ' + x.note : ''), w: 0, a: x.amount }))
   ].sort((p, q) => p.at - q.at);
   let run = 0;
@@ -98,3 +104,24 @@ function pdfShop(shop, rows) {
   d.setFontSize(11); d.setFont(undefined, 'bold'); d.text(balLine(tw - ta), 14, y);
   return d;
 }
+
+/* ---------- Parol ko'zi ---------- */
+function addEyes() {
+  document.querySelectorAll('input[type=password]:not([data-eye])').forEach(i => {
+    i.dataset.eye = 1;
+    const w = document.createElement('div'); w.className = 'pw';
+    i.parentNode.insertBefore(w, i); w.appendChild(i);
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'eye'; b.textContent = '👁';
+    b.onclick = () => { const s = i.type === 'password'; i.type = s ? 'text' : 'password'; b.textContent = s ? '🙈' : '👁'; };
+    w.appendChild(b);
+  });
+}
+new MutationObserver(addEyes).observe(document.body, { childList: true, subtree: true });
+addEyes();
+
+/* ---------- Dasturdan chiqish ---------- */
+function exitApp() {
+  try { const A = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App; if (A && A.exitApp) return A.exitApp(); } catch (e) {}
+  try { if (navigator.app && navigator.app.exitApp) navigator.app.exitApp(); } catch (e) {}
+}
+const withTimeout = (p, ms) => Promise.race([p, new Promise(r => setTimeout(r, ms))]);

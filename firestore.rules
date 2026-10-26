@@ -45,7 +45,17 @@ service cloud.firestore {
       }
       match /advances/{id} {
         allow read: if isAdmin(key) || (request.auth != null && isWorker(key, resource.data.wid));
-        allow create, update, delete: if isAdmin(key);
+        allow create, delete: if isAdmin(key);
+        allow update: if isAdmin(key) || (request.auth != null && isWorker(key, resource.data.wid)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['complaint']));
+      }
+      // ishchining "shuncha topshirdim" arizalari; faqat admin tasdiqlaydi/rad etadi
+      match /subs/{id} {
+        allow read: if isAdmin(key) || (request.auth != null && isWorker(key, resource.data.wid));
+        allow create: if isAdmin(key) || (request.auth != null && isWorker(key, request.resource.data.wid)
+          && request.resource.data.status == 'pending');
+        allow update: if isAdmin(key);
+        allow delete: if isAdmin(key) || (request.auth != null && isWorker(key, resource.data.wid) && resource.data.status == 'pending');
       }
     }
   }

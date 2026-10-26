@@ -14,7 +14,7 @@
 <script src="common.js"></script>
 <script src="fb.js"></script>
 <script>
-let S = { on: false, key: null, shop: null, pins: {}, works: [], adv: [] }, unsubs = [], LOGGING = false, TIMER = null;
+let S = { on: false, key: null, shop: null, pins: {}, works: [], adv: [], subs: [] }, unsubs = [], LOGGING = false, TIMER = null;
 
 /* ---------- Kirish ---------- */
 function loginScreen(mode = 'login', msg = '', ok = false) {
@@ -101,8 +101,11 @@ auth.onAuthStateChanged(u => {
   else { if (u) auth.signOut(); loginScreen(); }
 });
 async function logout() {
-  unsubs.forEach(f => f()); unsubs = []; clearInterval(TIMER); S = { on: false, key: null, shop: null, pins: {}, works: [], adv: [] };
-  await auth.signOut(); loginScreen();
+  unsubs.forEach(f => f()); unsubs = []; clearInterval(TIMER);
+  S = { on: false, key: null, shop: null, pins: {}, works: [], adv: [], subs: [] };
+  try { await withTimeout(auth.signOut(), 2500); } catch (e) {}
+  const sv = saved(); setSaved({ role: 'admin', email: sv && sv.email || '' });
+  loginScreen(); exitApp();
 }
 
 /* ---------- Ma'lumot ---------- */
@@ -115,11 +118,13 @@ function start() {
     b.onSnapshot(d => { S.shop = d.data(); render(); }, onErr),
     b.collection('workers').onSnapshot(q => { S.pins = {}; q.forEach(d => S.pins[d.id] = d.data().pin); render(); }, onErr),
     b.collection('works').orderBy('at', 'desc').onSnapshot(q => { S.works = q.docs.map(d => ({ id: d.id, ...d.data() })); render(); }, onErr),
-    b.collection('advances').orderBy('at', 'desc').onSnapshot(q => { S.adv = q.docs.map(d => ({ id: d.id, ...d.data() })); render(); }, onErr)
+    b.collection('advances').orderBy('at', 'desc').onSnapshot(q => { S.adv = q.docs.map(d => ({ id: d.id, ...d.data() })); render(); }, onErr),
+    b.collection('subs').orderBy('at', 'desc').onSnapshot(q => { S.subs = q.docs.map(d => ({ id: d.id, ...d.data() })); render(); }, onErr)
   ];
   TIMER = setInterval(render, 30000);
 }
-const tot = wid => calc(S.works.filter(x => x.wid === wid), S.adv.filter(x => x.wid === wid));
+const W = () => withOk(S.works, S.subs);
+const tot = wid => calc(W().filter(x => x.wid === wid), S.adv.filter(x => x.wid === wid));
 const workers = () => Object.entries((S.shop && S.shop.workers) || {}).map(([id, w]) => ({ id, ...w })).sort((a, b) => a.n.localeCompare(b.n));
 
 /* ---------- Ekranlar ---------- */
@@ -130,51 +135,65 @@ function render() {
   if (h.startsWith('#w') && S.shop.workers[h.slice(2)]) return renderWorker(h.slice(2));
   renderHome();
 }
+const newCmp = wid => S.works.filter(x => (!wid || x.wid === wid) && !x.canceled && x.complaint && !x.complaint.seen).length
+  + S.adv.filter(x => (!wid || x.wid === wid) && !x.canceled && x.complaint && !x.complaint.seen).length;
+const pendCnt = wid => S.subs.filter(x => (!wid || x.wid === wid) && x.status === 'pending').length;
 function renderHome() {
-  const act = S.works.filter(x => !x.canceled), ws = workers();
-  const cmp = act.filter(x => x.complaint && !x.complaint.seen).length;
-  const late = act.filter(x => !x.done && x.dueAt && x.dueAt < Date.now()).length;
-  const all = calc(S.works, S.adv);
+  const ws = workers(), Wk = W(), act = Wk.filter(x => !x.canceled);
+  const cmp = newCmp(), pd = pendCnt();
+  const late = act.filter(x => x.ok < x.qty && x.dueAt && x.dueAt < Date.now()).length;
+  const all = calc(Wk, S.adv);
   $('#app').innerHTML = `<div class="top"><div><b>${esc(S.shop.name)}</b><small>Admin</small></div><button class="ic" onclick="settings()">⚙️</button></div>
-  ${cmp || late ? `<div class="card">${cmp ? `<div class="late">⚠️ Yangi e'tirozlar: ${cmp}</div>` : ''}${late ? `<div class="late">⏰ Muddati o'tgan ishlar: ${late}</div>` : ''}</div>` : ''}
+  ${cmp || late || pd ? `<div class="card">${pd ? `<div class="left">📥 Tasdiq kutayotgan topshirishlar: ${pd}</div>` : ''}${cmp ? `<div class="late">⚠️ Yangi e'tirozlar: ${cmp}</div>` : ''}${late ? `<div class="late">⏰ Muddati o'tgan ishlar: ${late}</div>` : ''}</div>` : ''}
   <div class="card"><h4>Umumiy hisob</h4>
     <div>Jami berilgan ish: <b class="dn">+ ${money(all.w)}</b> so'm <span class="mut">(${all.cnt} dona)</span></div>
     <div>Jami berilgan avans: <b class="up">− ${money(all.a)}</b> so'm</div><hr>
     <div class="big ${balCls(all.bal)}">${balLine(all.bal)}</div>
+    <div class="mut">Ishchilar qo'lidagi ish: ${all.hand} dona</div>
     <button class="sm b2" style="margin-top:8px" onclick="shopPdf()">📄 Umumiy PDF hisobot</button></div>
   <div class="sec">Ishchilar (${ws.length})</div>
-  ${ws.map(w => { const t = tot(w.id), c = act.filter(x => x.wid === w.id && x.complaint && !x.complaint.seen).length;
-    return `<div class="row" onclick="location.hash='#w${w.id}'"><div><b>${esc(w.n)}</b> ${c ? '⚠️' : ''}<br><span class="dn">+${money(t.w)}</span> <span class="up">−${money(t.a)}</span></div>
+  ${ws.map(w => { const t = tot(w.id), c = newCmp(w.id), p = pendCnt(w.id);
+    return `<div class="row" onclick="location.hash='#w${w.id}'"><div><b>${esc(w.n)}</b> ${c ? '⚠️' : ''}${p ? '📥' : ''}<br><span class="dn">+${money(t.w)}</span> <span class="up">−${money(t.a)}</span></div>
     <div style="text-align:right"><b class="${balCls(t.bal)}">${money(Math.abs(t.bal))}</b><br><span class="mut">${t.bal > 0 ? 'qarz' : t.bal < 0 ? 'ortiqcha avans' : 'teng'}</span></div></div>`; }).join('') || '<div class="card mut">Hali ishchi yo\'q</div>'}
   <div style="padding:10px"><button style="width:100%" onclick="addWorker()">➕ Ishchi qo'shish</button></div>`;
 }
+const SUBST = { ok: '✅ tasdiqlangan', no: '❌ rad etilgan', pending: '⏳ tasdiq kutilmoqda' };
 function renderWorker(wid) {
-  const w = S.shop.workers[wid], t = tot(wid);
-  const works = S.works.filter(x => x.wid === wid), advs = S.adv.filter(x => x.wid === wid);
-  const hand = works.filter(x => !x.done && !x.canceled).sort((a, b) => (a.dueAt || 9e15) - (b.dueAt || 9e15));
-  const hist = [...works.filter(x => x.done || x.canceled).map(x => ({ k: 'w', x })), ...advs.map(x => ({ k: 'a', x }))].sort((p, q) => q.x.at - p.x.at);
-  const wItem = x => { const L = x.dueAt && !x.done && !x.canceled ? left(x.dueAt) : null;
+  const w = S.shop.workers[wid], Wk = W().filter(x => x.wid === wid), t = tot(wid);
+  const advs = S.adv.filter(x => x.wid === wid), subsAll = S.subs.filter(x => x.wid === wid);
+  const pend = subsAll.filter(x => x.status === 'pending');
+  const hand = Wk.filter(x => !x.canceled && x.ok < x.qty).sort((a, b) => (a.dueAt || 9e15) - (b.dueAt || 9e15));
+  const hist = [...Wk.filter(x => x.canceled || x.ok >= x.qty).map(x => ({ k: 'w', x })), ...advs.map(x => ({ k: 'a', x }))].sort((p, q) => q.x.at - p.x.at);
+  const wItem = x => { const L = x.dueAt && x.ok < x.qty && !x.canceled ? left(x.dueAt) : null;
+    const ss = subsAll.filter(s => s.workId === x.id && s.status !== 'pending');
     return `<div class="item"><div class="h"><div class="${x.canceled ? 'strike' : ''}"><b>${esc(x.model)}</b><br>${x.qty} dona × ${money(x.price)}</div>
       <div class="amt dn ${x.canceled ? 'strike' : ''}">+ ${money(x.qty * x.price)}</div></div>
-    <div class="mut">${fmt(x.at)}${x.quality ? ' · Sifat: ' + esc(x.quality) : ''}${x.done && x.doneAt ? ' · Topshirdi: ' + fmt(x.doneAt) : ''}${x.canceled ? ' · bekor qilingan' : ''}</div>
+    <div class="mut">${fmt(x.at)}${x.quality ? ' · Sifat: ' + esc(x.quality) : ''}${x.canceled ? ' · bekor qilingan' : ''}</div>
+    ${x.canceled ? '' : `<div class="sub">Topshirilgan (tasdiqlangan): <b>${x.ok}</b> / ${x.qty} dona${x.pend ? ` · ⏳ kutilmoqda: ${x.pend}` : ''}</div><div class="bar"><i style="width:${Math.min(100, x.ok / x.qty * 100)}%"></i></div>`}
+    ${ss.map(s => `<div class="sub mut">${SUBST[s.status]}: ${s.q} dona · ${fmt(s.at)}${s.by === 'admin' ? ' (admin kiritgan)' : ''}</div>`).join('')}
     ${L ? `<div class="${L.late ? 'late' : 'left'}">${L.t} (${fmt(x.dueAt)})</div>` : ''}
     ${x.complaint ? `<div class="cmp">⚠️ <b>E'tiroz</b> (${fmt(x.complaint.at)}): ${esc(x.complaint.text)}${x.complaint.seen ? ' ✓ ko\'rildi' : ''}</div>` : ''}
     ${x.canceled ? '' : `<div class="acts">
-      ${!x.done ? `<button class="sm ok" onclick="markDone('${x.id}')">✅ Topshirdi</button>` : `<button class="sm b2" onclick="markUndone('${x.id}')">↩️ Qaytarish</button>`}
-      ${x.complaint && !x.complaint.seen ? `<button class="sm" onclick="seen('${x.id}')">👁 Ko'rdim</button>` : ''}
+      ${x.ok < x.qty ? `<button class="sm ok" onclick="receive('${x.id}','${wid}')">📥 Qabul qilish</button>` : ''}
+      ${x.complaint && !x.complaint.seen ? `<button class="sm" onclick="seen('works','${x.id}')">👁 Ko'rdim</button>` : ''}
       <button class="sm red" onclick="cancelWork('${x.id}')">❌ Xato</button></div>`}</div>`; };
   const aItem = x => `<div class="item"><div class="h"><div class="${x.canceled ? 'strike' : ''}"><b>Avans</b>${x.note ? '<br>' + esc(x.note) : ''}</div>
     <div class="amt up ${x.canceled ? 'strike' : ''}">− ${money(x.amount)}</div></div>
     <div class="mut">${fmt(x.at)}${x.canceled ? ' · bekor qilingan' : ''}</div>
-    ${x.canceled ? '' : `<div class="acts"><button class="sm red" onclick="cancelAdv('${x.id}')">❌ Xato</button></div>`}</div>`;
+    ${x.complaint ? `<div class="cmp">⚠️ <b>E'tiroz</b> (${fmt(x.complaint.at)}): ${esc(x.complaint.text)}${x.complaint.seen ? ' ✓ ko\'rildi' : ''}</div>` : ''}
+    ${x.canceled ? '' : `<div class="acts">${x.complaint && !x.complaint.seen ? `<button class="sm" onclick="seen('advances','${x.id}')">👁 Ko'rdim</button>` : ''}<button class="sm red" onclick="cancelAdv('${x.id}')">❌ Xato</button></div>`}</div>`;
+  const pItem = s => { const x = S.works.find(k => k.id === s.workId);
+    return `<div class="item"><div><b>${x ? esc(x.model) : 'Ish'}</b>: ishchi <b>${s.q} dona</b> topshirdim deydi</div><div class="mut">${fmt(s.at)}</div>
+    <div class="acts"><button class="sm ok" onclick="setSub('${s.id}','ok')">✅ Tasdiqlash</button><button class="sm red" onclick="setSub('${s.id}','no')">❌ Rad etish</button></div></div>`; };
   $('#app').innerHTML = `<div class="top"><div><b>${esc(w.n)}</b><small>${esc(S.shop.name)}</small></div><button class="ic" onclick="location.hash=''">⬅️</button></div>
   <div class="card"><div>Berilgan ish: <b class="dn">+ ${money(t.w)}</b> so'm <span class="mut">(${t.cnt} dona)</span></div>
   <div>Berilgan avans: <b class="up">− ${money(t.a)}</b> so'm</div><hr>
   <div class="big ${balCls(t.bal)}">${balLine(t.bal)}</div>
-  <div class="mut">Qo'lidagi ish: ${t.hand} dona</div><hr>
+  <div class="mut">Qo'lidagi ish: ${t.hand} dona${t.pend ? ` · tasdiq kutilmoqda: ${t.pend} dona` : ''}</div><hr>
   <div>PIN kod: <span class="pin">${esc(S.pins[wid] || '—')}</span> <button class="sm b2" onclick="changePin('${wid}')">O'zgartirish</button></div>
   <div style="display:flex;gap:8px;margin-top:10px"><button style="flex:1" onclick="giveWork('${wid}')">📦 Ish berish</button><button style="flex:1" onclick="giveAdv('${wid}')">💵 Avans</button></div>
   <button class="sm b2" style="margin-top:8px" onclick="workerPdf('${wid}')">📄 PDF hisobot</button></div>
+  ${pend.length ? `<div class="sec">📥 Tasdiq kutilmoqda (${pend.length})</div>${pend.map(pItem).join('')}` : ''}
   <div class="sec">Qo'lidagi ishlar (${hand.length})</div>${hand.map(wItem).join('') || '<div class="item mut">Yo\'q</div>'}
   <div class="sec">Hisob tarixi</div>${hist.map(e => e.k === 'w' ? wItem(e.x) : aItem(e.x)).join('') || '<div class="item mut">Yo\'q</div>'}
   <div style="padding:14px"><button class="b2 red" style="width:100%" onclick="delWorker('${wid}')">🗑 Ishchini o'chirish</button></div>`;
@@ -213,7 +232,7 @@ function changePin(wid) {
 async function delWorker(wid) {
   if (!confirm("Ishchi va uning hamma ish/avans yozuvlari butunlay o'chadi. Davom etamizmi?")) return;
   try {
-    for (const c of ['works', 'advances']) { const q = await base().collection(c).where('wid', '==', wid).get(); const b = fs.batch(); q.docs.forEach(d => b.delete(d.ref)); await b.commit(); }
+    for (const c of ['works', 'advances', 'subs']) { const q = await base().collection(c).where('wid', '==', wid).get(); const b = fs.batch(); q.docs.forEach(d => b.delete(d.ref)); await b.commit(); }
     const b = fs.batch(); b.delete(base().collection('workers').doc(wid)); b.update(base(), { ['workers.' + wid]: FV.delete() }); await b.commit();
     location.hash = '';
   } catch (e) { alert(errTxt(e)); }
@@ -228,7 +247,7 @@ function giveWork(wid) {
   ], async v => {
     const qty = pn(v.qty), price = pn(v.price);
     if (!v.model || !(qty > 0) || !(price >= 0)) return "Nom, soni va narxni to'g'ri kiriting";
-    const o = { wid, model: v.model, qty, price, quality: v.quality || '', at: Date.now(), done: false, canceled: false, dueAt: null };
+    const o = { wid, model: v.model, qty, price, quality: v.quality || '', at: Date.now(), canceled: false, dueAt: null };
     if (v.dl) { const d = new Date(v.due).getTime(); if (!d) return 'Muddatni kiriting'; o.dueAt = d; }
     await base().collection('works').doc(nid()).set(o);
   });
@@ -239,17 +258,23 @@ function giveAdv(wid) {
     await base().collection('advances').doc(nid()).set({ wid, amount: a, note: v.note || '', at: Date.now(), canceled: false });
   });
 }
+function receive(workId, wid) {
+  const x = W().find(k => k.id === workId), rem = x.qty - x.ok;
+  form(`Qabul qilish: ${x.model}`, [{ k: 'q', label: `Necha dona qabul qilindi? (qolgan: ${rem})`, type: 'num', value: rem }], async v => {
+    const q = pn(v.q); if (!(q > 0)) return "Sonni to'g'ri kiriting"; if (q > rem) return `Qolgan ishdan ko'p: ${rem} dona`;
+    await base().collection('subs').doc(nid()).set({ wid, workId, q, at: Date.now(), status: 'ok', by: 'admin' });
+  });
+}
+const setSub = (id, status) => base().collection('subs').doc(id).update({ status, decidedAt: Date.now() }).catch(e => alert(errTxt(e)));
 const upd = (c, id, o) => base().collection(c).doc(id).update(o).catch(e => alert(errTxt(e)));
-const markDone = id => upd('works', id, { done: true, doneAt: Date.now() });
-const markUndone = id => upd('works', id, { done: false, doneAt: FV.delete() });
-const seen = id => upd('works', id, { 'complaint.seen': true });
+const seen = (c, id) => upd(c, id, { 'complaint.seen': true });
 const cancelWork = id => confirm("Bu ish yozuvi xato deb bekor qilinsinmi? (Ishchiga ham chizilgan holda ko'rinadi)") && upd('works', id, { canceled: true });
 const cancelAdv = id => confirm('Bu avans yozuvi xato deb bekor qilinsinmi?') && upd('advances', id, { canceled: true });
 
 /* ---------- PDF ---------- */
 function workerPdf(wid) {
   const n = S.shop.workers[wid].n;
-  savePdf(pdfWorker(n, S.shop.name, S.works.filter(x => x.wid === wid), S.adv.filter(x => x.wid === wid)), `hisobot_${norm(n) || 'ishchi'}.pdf`);
+  savePdf(pdfWorker(n, S.shop.name, W().filter(x => x.wid === wid), S.adv.filter(x => x.wid === wid)), `hisobot_${norm(n) || 'ishchi'}.pdf`);
 }
 function shopPdf() {
   const rows = workers().map(w => { const t = tot(w.id); return { n: w.n, cnt: t.cnt, w: t.w, a: t.a, bal: t.bal }; });
@@ -260,7 +285,7 @@ function shopPdf() {
 function settings() {
   $('#modal').innerHTML = `<div class="ov"><div class="sheet stack"><h3>Sozlamalar</h3>
   <button class="b2" onclick="close();toLauncher()">🔁 Rejimni almashtirish</button>
-  <button class="b2" onclick="close();logout()">🚪 Chiqish</button>
+  <button class="b2" onclick="close();logout()">🚪 Chiqish (dasturdan)</button>
   <button class="red" onclick="close();delAccount()">🗑 Akkauntni butunlay o'chirish</button>
   <button class="b2" onclick="close()">Yopish</button></div></div>`;
 }
@@ -269,7 +294,7 @@ function delAccount() {
     if (!confirm("Seh, ishchilar va hamma ma'lumot butunlay o'chadi. Davom etamizmi?")) return false;
     const u = auth.currentUser;
     await u.reauthenticateWithCredential(firebase.auth.EmailAuthProvider.credential(u.email, v.p));
-    for (const c of ['workers', 'works', 'advances']) {
+    for (const c of ['workers', 'works', 'advances', 'subs']) {
       const q = await base().collection(c).get(); let b = fs.batch(), n = 0;
       for (const d of q.docs) { b.delete(d.ref); if (++n === 400) { await b.commit(); b = fs.batch(); n = 0; } }
       await b.commit();

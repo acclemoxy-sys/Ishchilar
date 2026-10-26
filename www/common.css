@@ -43,3 +43,11 @@ label.chk input{width:20px;height:20px}
 .amt{white-space:nowrap;font-weight:700;text-align:right}
 .okm{background:#dcfce7;color:#166534;padding:8px 10px;border-radius:8px;margin-bottom:8px}
 .lnk{background:none;color:#2563eb;padding:6px 0;text-decoration:underline}
+
+.pw{position:relative}
+.pw input{padding-right:48px}
+.eye{position:absolute;right:4px;top:50%;transform:translateY(-50%);background:transparent;color:#555;padding:6px 10px;font-size:18px}
+.sub{font-size:14px;margin-top:4px}
+.pend{background:#e0f2fe;border-radius:8px;padding:6px 8px;margin-top:6px;font-size:14px}
+.bar{height:8px;background:#e5e7eb;border-radius:4px;overflow:hidden;margin-top:6px}
+.bar i{display:block;height:100%;background:#16a34a}
